@@ -1,0 +1,690 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scaled=no" />
+  <title>TRAP Word Ninja</title>
+  <style>
+    html, body { margin:0; padding:0; height:100%; overflow:hidden; touch-action:none; background:#070914; }
+    canvas { display:block; width:100vw; height:100vh; }
+
+    .hud{
+      position:fixed; top:12px; left:12px; right:12px;
+      display:flex; justify-content:space-between; align-items:center;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color:#eef2ff; font-weight:800; letter-spacing:.2px;
+      pointer-events:none; user-select:none;
+      text-shadow: 0 2px 12px rgba(0,0,0,.7);
+      gap:10px;
+    }
+    .pill{
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.12);
+      padding: 8px 12px;
+      border-radius: 999px;
+      backdrop-filter: blur(8px);
+      display:flex; gap:8px; align-items:center;
+      white-space:nowrap;
+    }
+
+    .btnAudio{
+      position:fixed; top:12px; left:50%; transform:translateX(-50%);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      font-weight:900;
+      background: rgba(255,255,255,.10);
+      border: 1px solid rgba(255,255,255,.14);
+      color: rgba(238,242,255,.92);
+      border-radius: 999px;
+      padding: 8px 12px;
+      cursor:pointer;
+      user-select:none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .centerToast{
+      position:fixed; top:64px; left:50%; transform:translateX(-50%);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      font-weight: 900;
+      color:#eef2ff;
+      text-shadow: 0 2px 18px rgba(0,0,0,.75);
+      pointer-events:none; user-select:none;
+      opacity:0; transition: opacity .08s linear;
+      letter-spacing: .6px;
+    }
+
+    .hint{
+      position:fixed; bottom:14px; left:50%; transform:translateX(-50%);
+      color: rgba(238,242,255,.72);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      font-size: 13px;
+      pointer-events:none; user-select:none;
+      text-shadow: 0 2px 12px rgba(0,0,0,.7);
+    }
+  </style>
+</head>
+<body>
+  <div class="hud">
+    <div class="pill">Очки: <span id="score">0</span></div>
+    <div class="pill">Жизни: <span id="lives">3</span></div>
+  </div>
+
+  <button class="btnAudio" id="audioBtn" type="button">🔇 MUSIC</button>
+  <div class="centerToast" id="toast">COMBO x2</div>
+  <div class="hint">Свайп/мышь. Музыка и SFX включатся после первого тапа</div>
+
+  <canvas id="c"></canvas>
+
+  <!-- Файлы рядом с index.html -->
+  <audio id="bgm" src="music.mp3" loop preload="auto"></audio>
+  <audio id="comboSfx" src="Combo.mp3" preload="auto"></audio>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  const scoreEl = document.getElementById('score');
+  const livesEl = document.getElementById('lives');
+  const toastEl = document.getElementById('toast');
+
+  const bgm = document.getElementById('bgm');
+  const comboSfx = document.getElementById('comboSfx');
+  const audioBtn = document.getElementById('audioBtn');
+
+  // ====== THEME ======
+  const THEME = {
+    bgTop:   "#070914",
+    bgBottom:"#040513",
+    starAlpha: 0.18,
+
+    bladeOuter: "rgba(210,255,255,0.90)",
+    bladeCore:  "rgba(255,255,255,0.95)",
+
+    stroke: "rgba(0,0,0,0.62)",
+    trapGlow: "rgba(0,255,170,0.92)"
+  };
+
+  // Неон-палитра (каждое слово своего цвета)
+  const COLORS = [
+    "#7CFFB2", "#7AD7FF", "#C0A7FF", "#FF7AD7", "#FFD37A", "#7AFFE6",
+    "#FF7A7A", "#A7FF7A", "#7A9BFF", "#FF7AF0", "#B6FF7A", "#7AFFF6"
+  ];
+
+  // --- Resize with DPR ---
+  function resize(){
+    const dpr = Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
+    canvas.width = Math.floor(innerWidth * dpr);
+    canvas.height = Math.floor(innerHeight * dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  addEventListener('resize', resize, {passive:true});
+  resize();
+
+  // --- Words ---
+  const WORDS = [
+    "пятак","джанк","бандит","трафик","ограбить","статья","мафия","Сатана","шлюха","сода","фармацевт",
+    "ТРЭП"
+  ];
+  const TRAP = "ТРЭП";
+
+  // --- Utils ---
+  function rand(a,b){ return a + Math.random()*(b-a); }
+  function pick(arr){ return arr[(Math.random()*arr.length)|0]; }
+  function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+  function isTrap(t){ return t === TRAP; }
+
+  // ===== SFX: 7 разных слэшей + combo =====
+  const SLASH_FILES = [
+    "Sword-swipe-1.mp3",
+    "Sword-swipe-2.mp3",
+    "Sword-swipe-3.mp3",
+    "Sword-swipe-4.mp3",
+    "Sword-swipe-5.mp3",
+    "Sword-swipe-6.mp3",
+    "Sword-swipe-7.mp3",
+  ];
+  const slashPool = SLASH_FILES.map(src => {
+    const a = new Audio(src);
+    a.preload = "auto";
+    return a;
+  });
+
+  let audioUnlocked = false;
+  let musicOn = false;
+
+  function unlockAudioOnce(){
+    if (audioUnlocked) return;
+    audioUnlocked = true;
+
+    // unlock mobile audio: short silent play
+    const a = slashPool[0].cloneNode(true);
+    a.volume = 0.001;
+    a.play().then(() => {
+      a.pause();
+      a.currentTime = 0;
+    }).catch(()=>{});
+
+    const c = comboSfx.cloneNode(true);
+    c.volume = 0.001;
+    c.play().then(() => {
+      c.pause();
+      c.currentTime = 0;
+    }).catch(()=>{});
+
+    if (musicOn){
+      bgm.volume = 0.45;
+      bgm.play().catch(()=>{});
+    }
+  }
+
+  function setMusic(on){
+    musicOn = on;
+    audioBtn.textContent = musicOn ? "🔊 MUSIC" : "🔇 MUSIC";
+    if (musicOn){
+      bgm.volume = 0.45;
+      bgm.play().catch(()=>{});
+    } else {
+      bgm.pause();
+      bgm.currentTime = 0;
+    }
+  }
+
+  audioBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    unlockAudioOnce();
+    setMusic(!musicOn);
+  });
+
+  function playRandomSlash(intensity = 1){
+    if (!audioUnlocked) return;
+    const base = slashPool[(Math.random() * slashPool.length) | 0];
+    const a = base.cloneNode(true);
+    a.volume = clamp(0.45 + 0.35 * intensity, 0, 1);
+    a.playbackRate = clamp(0.95 + 0.25 * intensity, 0.8, 1.35);
+    a.play().catch(()=>{});
+  }
+
+  function playComboSfx(){
+    if (!audioUnlocked) return;
+    const a = comboSfx.cloneNode(true);
+    a.volume = 0.85;
+    a.playbackRate = 1.0;
+    a.play().catch(()=>{});
+  }
+
+  // --- Game state ---
+  let score = 0;
+  let lives = 3;
+  let running = true;
+
+  const targets = [];
+  const pieces = [];
+  const particles = [];
+
+  let spawnTimer = 0;
+  let spawnInterval = 0.85;
+
+  // --- Spawn spacing (avoid overlap/“collision”) ---
+  const MIN_SPAWN_DIST = 140;
+  function farEnough(x){
+    for (const t of targets){
+      if (t.sliced) continue;
+      const dx = t.x - x;
+      if (Math.abs(dx) < MIN_SPAWN_DIST && t.y > innerHeight - 260) return false;
+    }
+    return true;
+  }
+
+  function colorForText(text){
+    if (isTrap(text)) return "#B6FFF0";
+    let h = 0;
+    for (let i=0;i<text.length;i++) h = (h*31 + text.charCodeAt(i)) >>> 0;
+    return COLORS[h % COLORS.length];
+  }
+
+  function spawnTarget(){
+    const r = Math.random();
+    const text = (r < 0.17) ? TRAP : pick(WORDS.filter(w => w !== TRAP));
+
+    let x = rand(90, innerWidth-90);
+    for (let i=0;i<12;i++){
+      if (farEnough(x)) break;
+      x = rand(90, innerWidth-90);
+    }
+
+    const y = innerHeight + 40;
+    const baseSize = isTrap(text) ? rand(44, 56) : rand(26, 42);
+    const vx = isTrap(text) ? rand(-55, 55) : rand(-95, 95);
+    const vy = isTrap(text) ? rand(-900, -730) : rand(-820, -640);
+    const g  = rand(900, 1200);
+
+    targets.push({
+      text, x, y, vx, vy, g,
+      size: baseSize,
+      rot: rand(-0.7, 0.7),
+      omega: rand(-1.3, 1.3),
+      sliced:false,
+      r: Math.max(30, text.length * (baseSize*0.36)),
+      color: colorForText(text)
+    });
+  }
+
+  function makePiece(text, x,y,vx,vy,g,size,rot,omega, color, trap){
+    return { text, x,y,vx,vy,g,size,rot,omega, life: 1.0, alpha: 1, color, trap };
+  }
+
+  function spawnSparks(x,y, power=1, color="#ffffff", trap=false){
+    const n = Math.floor(18 + 18*power + (trap?14:0));
+    for (let i=0;i<n;i++){
+      const ang = rand(-Math.PI, Math.PI);
+      const sp = rand(140, 520) * (0.8 + 0.8*power);
+      particles.push({
+        kind:"spark", x,y,
+        vx: Math.cos(ang)*sp,
+        vy: Math.sin(ang)*sp - rand(80, 180),
+        g: rand(900, 1400),
+        life: rand(0.35, 0.75) + (trap?0.15:0),
+        alpha:1,
+        size: rand(1.6, 3.8) + (trap?0.8:0),
+        color,
+        trap
+      });
+    }
+  }
+
+  function spawnLetterBits(text, x,y, power=1, color="#ffffff", trap=false){
+    const chars = [...text];
+    const pickCount = Math.min(chars.length, Math.floor(3 + 3*power + (trap?2:0)));
+    for (let i=0;i<pickCount;i++){
+      const ch = chars[(Math.random()*chars.length)|0];
+      const ang = rand(-Math.PI, Math.PI);
+      const sp = rand(110, 380) * (0.9 + 0.6*power);
+      particles.push({
+        kind:"char", ch,
+        x: x + rand(-8,8),
+        y: y + rand(-8,8),
+        vx: Math.cos(ang)*sp,
+        vy: Math.sin(ang)*sp - rand(60, 140),
+        g: rand(900, 1300),
+        life: rand(0.45, 0.95) + (trap?0.18:0),
+        alpha:1,
+        size: rand(14, 22) + (trap?6:0),
+        rot: rand(-0.8, 0.8),
+        omega: rand(-5, 5),
+        color,
+        trap
+      });
+    }
+  }
+
+  function showComboToast(k){
+    toastEl.textContent = `COMBO x${k}`;
+    toastEl.style.opacity = "1";
+    clearTimeout(showComboToast._t);
+    showComboToast._t = setTimeout(() => toastEl.style.opacity = "0", 220);
+  }
+
+  // --- Slash trail + combo ---
+  let pointerDown = false;
+  const trail = [];
+  const TRAIL_MS = 90;
+  const SLICE_FRESH_MS = 28; // режем только если движение свежее
+  let swipeHits = 0;
+  let swipeScored = false;
+
+  function addPoint(px, py){
+    const now = performance.now();
+    trail.push({x:px, y:py, t:now});
+    while (trail.length && now - trail[0].t > TRAIL_MS) trail.shift();
+  }
+  function getPos(e){
+    const rect = canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (!running) { restart(); return; }
+    unlockAudioOnce();
+
+    pointerDown = true;
+    swipeHits = 0;
+    swipeScored = false;
+    trail.length = 0;
+
+    canvas.setPointerCapture(e.pointerId);
+    const p = getPos(e);
+    addPoint(p.x, p.y);
+  }, {passive:true});
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (!pointerDown) return;
+    const p = getPos(e);
+    addPoint(p.x, p.y);
+  }, {passive:true});
+
+  canvas.addEventListener('pointerup', () => {
+    pointerDown = false;
+
+    if (swipeHits >= 2 && !swipeScored){
+      const bonus = 12 * swipeHits * (swipeHits-1);
+      score += bonus;
+      scoreEl.textContent = score;
+      showComboToast(swipeHits);
+      playComboSfx(); // combo звук
+      swipeScored = true;
+    }
+  }, {passive:true});
+
+  canvas.addEventListener('pointercancel', () => { pointerDown = false; }, {passive:true});
+
+  // --- Geometry ---
+  function segIntersectsCircle(ax,ay,bx,by,cx,cy,r){
+    const abx = bx-ax, aby = by-ay;
+    const acx = cx-ax, acy = cy-ay;
+    const ab2 = abx*abx + aby*aby;
+    let t = ab2 ? (acx*abx + acy*aby)/ab2 : 0;
+    t = clamp(t, 0, 1);
+    const hx = ax + abx*t, hy = ay + aby*t;
+    const dx = cx - hx, dy = cy - hy;
+    return (dx*dx + dy*dy) <= r*r;
+  }
+
+  function sliceTarget(t, slashSpeed){
+    t.sliced = true;
+    const trap = isTrap(t.text);
+
+    const intensity = clamp((slashSpeed/900) + (trap?0.35:0), 0.6, 1.6);
+    playRandomSlash(intensity);
+
+    const left = t.text.slice(0, Math.ceil(t.text.length/2));
+    const right = t.text.slice(Math.ceil(t.text.length/2));
+
+    const kick = trap ? 240 : 190;
+    pieces.push(makePiece(left,  t.x-12, t.y, t.vx - kick, t.vy - 90, t.g, t.size*0.95, t.rot-0.22, t.omega-1.0, t.color, trap));
+    pieces.push(makePiece(right, t.x+12, t.y, t.vx + kick, t.vy - 90, t.g, t.size*0.95, t.rot+0.22, t.omega+1.0, t.color, trap));
+
+    const power = clamp(slashSpeed/1000, 0.6, 1.6);
+    spawnSparks(t.x, t.y, power, t.color, trap);
+    spawnLetterBits(t.text, t.x, t.y, power, t.color, trap);
+
+    const base = trap ? 55 : 12;
+    score += base + Math.min(26, Math.floor(t.text.length * (trap?3:1)));
+    scoreEl.textContent = score;
+
+    swipeHits += 1;
+  }
+
+  function checkSlashes(){
+    // ВАЖНО: режем только когда палец/мышь реально зажаты
+    if (!pointerDown) return;
+
+    if (trail.length < 2) return;
+    const a = trail[trail.length-2];
+    const b = trail[trail.length-1];
+
+    // ещё один фикс от "само": движение должно быть очень свежее
+    if (performance.now() - b.t > SLICE_FRESH_MS) return;
+
+    const dx = b.x-a.x, dy = b.y-a.y;
+    const dist2 = dx*dx + dy*dy;
+    if (dist2 < 18) return;
+
+    const slashSpeed = Math.sqrt(dist2) / (Math.max(1, (b.t - a.t))) * 1000;
+
+    for (const t of targets){
+      if (t.sliced) continue;
+      if (Math.abs(t.x - b.x) > t.r + 70 && Math.abs(t.x - a.x) > t.r + 70) continue;
+      if (segIntersectsCircle(a.x,a.y,b.x,b.y,t.x,t.y,t.r)){
+        sliceTarget(t, slashSpeed);
+      }
+    }
+  }
+
+  // --- Drawing ---
+  function drawBackground(){
+    const g = ctx.createLinearGradient(0,0,0,innerHeight);
+    g.addColorStop(0, THEME.bgTop);
+    g.addColorStop(1, THEME.bgBottom);
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,innerWidth,innerHeight);
+
+    ctx.globalAlpha = THEME.starAlpha;
+    ctx.fillStyle = "#ffffff";
+    for (let i=0;i<70;i++){
+      const x = (i*97) % innerWidth;
+      const y = (i*57) % innerHeight;
+      ctx.fillRect(x, y, 1, 1);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawWord(t){
+    const trap = isTrap(t.text);
+
+    ctx.save();
+    ctx.translate(t.x, t.y);
+    ctx.rotate(t.rot);
+
+    const size = t.size;
+    ctx.font = `900 ${size}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    // неоновый глоу
+    ctx.shadowColor = trap ? THEME.trapGlow : t.color;
+    ctx.shadowBlur = trap ? 26 : 16;
+
+    ctx.lineWidth = Math.max(3, size*0.16);
+    ctx.strokeStyle = THEME.stroke;
+    ctx.strokeText(t.text, 0, 0);
+
+    ctx.fillStyle = "rgba(245,250,255,0.98)";
+    ctx.fillText(t.text, 0, 0);
+
+    // тонкая цветная “подсветка” по краю
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = Math.max(1.5, size*0.06);
+    ctx.strokeStyle = trap ? "rgba(190,255,235,0.78)" : t.color;
+    ctx.strokeText(t.text, 0, 0);
+
+    ctx.restore();
+  }
+
+  function drawPiece(p){
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rot);
+    ctx.globalAlpha = p.alpha;
+
+    const size = p.size;
+    ctx.font = `900 ${size}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    ctx.shadowColor = p.trap ? THEME.trapGlow : p.color;
+    ctx.shadowBlur = p.trap ? 22 : 14;
+
+    ctx.lineWidth = Math.max(3, size*0.16);
+    ctx.strokeStyle = THEME.stroke;
+    ctx.strokeText(p.text, 0, 0);
+
+    ctx.fillStyle = "rgba(245,250,255,0.98)";
+    ctx.fillText(p.text, 0, 0);
+
+    ctx.restore();
+  }
+
+  function drawParticles(){
+    for (const prt of particles){
+      ctx.save();
+      ctx.globalAlpha = prt.alpha;
+
+      if (prt.kind === "spark"){
+        ctx.fillStyle = prt.trap ? "rgba(170,255,220,0.95)" : "rgba(255,255,255,0.92)";
+        ctx.shadowColor = prt.trap ? THEME.trapGlow : prt.color;
+        ctx.shadowBlur = prt.trap ? 18 : 12;
+        ctx.beginPath();
+        ctx.arc(prt.x, prt.y, prt.size, 0, Math.PI*2);
+        ctx.fill();
+      } else {
+        ctx.translate(prt.x, prt.y);
+        ctx.rotate(prt.rot);
+
+        ctx.shadowColor = prt.trap ? THEME.trapGlow : prt.color;
+        ctx.shadowBlur = prt.trap ? 14 : 10;
+
+        ctx.font = `900 ${prt.size}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        ctx.lineWidth = Math.max(2, prt.size*0.12);
+        ctx.strokeStyle = THEME.stroke;
+        ctx.strokeText(prt.ch, 0, 0);
+
+        ctx.fillStyle = "rgba(245,250,255,0.98)";
+        ctx.fillText(prt.ch, 0, 0);
+      }
+
+      ctx.restore();
+    }
+  }
+
+  function drawTrail(){
+    const now = performance.now();
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    for (let i=1;i<trail.length;i++){
+      const p0 = trail[i-1], p1 = trail[i];
+      const age = now - p1.t;
+      const a = clamp(1 - age/TRAIL_MS, 0, 1);
+      const w = 12 * a + 2;
+
+      ctx.globalAlpha = 0.70 * a;
+      ctx.lineWidth = w;
+      ctx.strokeStyle = THEME.bladeOuter;
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y);
+      ctx.lineTo(p1.x, p1.y);
+      ctx.stroke();
+
+      ctx.globalAlpha = 0.55 * a;
+      ctx.lineWidth = Math.max(2, w*0.35);
+      ctx.strokeStyle = THEME.bladeCore;
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y);
+      ctx.lineTo(p1.x, p1.y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // --- Game flow ---
+  function gameOver(){ running = false; }
+  function restart(){
+    score = 0; lives = 3;
+    scoreEl.textContent = score;
+    livesEl.textContent = lives;
+    targets.length = 0;
+    pieces.length = 0;
+    particles.length = 0;
+    spawnTimer = 0;
+    spawnInterval = 0.85;
+    running = true;
+  }
+
+  // --- Main loop ---
+  let last = performance.now();
+  function loop(now){
+    const dt = Math.min(0.033, (now-last)/1000);
+    last = now;
+
+    drawBackground();
+
+    if (running){
+      spawnTimer += dt;
+      if (spawnTimer >= spawnInterval){
+        spawnTimer = 0;
+        spawnTarget();
+        if (Math.random() < 0.16) spawnTarget();
+        spawnInterval = Math.max(0.44, spawnInterval - 0.0022);
+      }
+
+      for (const t of targets){
+        if (t.sliced) continue;
+
+        t.vy += t.g * dt;
+        t.x += t.vx * dt;
+        t.y += t.vy * dt;
+        t.rot += t.omega * dt;
+
+        if (t.x < 70) t.x = 70;
+        if (t.x > innerWidth-70) t.x = innerWidth-70;
+
+        // промах: слово упало — минус жизнь, без раскола
+        if (t.y > innerHeight + 90){
+          t.sliced = true;
+          lives -= 1;
+          livesEl.textContent = lives;
+          if (lives <= 0) gameOver();
+        }
+      }
+
+      for (const p of pieces){
+        p.vy += p.g * dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.rot += p.omega * dt;
+        p.life -= dt;
+        p.alpha = clamp(p.life/1.0, 0, 1);
+      }
+
+      for (const prt of particles){
+        prt.vy += prt.g * dt;
+        prt.x += prt.vx * dt;
+        prt.y += prt.vy * dt;
+        prt.life -= dt;
+        prt.alpha = clamp(prt.life/0.9, 0, 1);
+        if (prt.kind === "char") prt.rot += prt.omega * dt;
+      }
+
+      checkSlashes();
+
+      for (let i=targets.length-1;i>=0;i--) if (targets[i].sliced) targets.splice(i,1);
+      for (let i=pieces.length-1;i>=0;i--) if (pieces[i].life <= 0 || pieces[i].y > innerHeight + 250) pieces.splice(i,1);
+      for (let i=particles.length-1;i>=0;i--) if (particles[i].life <= 0 || particles[i].y > innerHeight + 300) particles.splice(i,1);
+    }
+
+    for (const t of targets) if (!t.sliced) drawWord(t);
+    for (const p of pieces) drawPiece(p);
+    drawParticles();
+    drawTrail();
+
+    if (!running){
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.60)";
+      ctx.fillRect(0,0,innerWidth,innerHeight);
+      ctx.fillStyle = "#eef2ff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "900 46px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.fillText("GAME OVER", innerWidth/2, innerHeight/2 - 40);
+      ctx.font = "800 18px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.fillText(`Очки: ${score}`, innerWidth/2, innerHeight/2 + 2);
+      ctx.fillStyle = "rgba(238,242,255,0.85)";
+      ctx.fillText("Тап/клик — начать заново", innerWidth/2, innerHeight/2 + 42);
+      ctx.restore();
+    }
+
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // старт
+  setMusic(false);
+
+})();
+</script>
+</body>
+</html>
